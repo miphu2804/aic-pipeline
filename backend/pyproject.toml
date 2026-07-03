@@ -1,0 +1,25 @@
+[project]
+name = "aic-pipeline"
+version = "0.1.0"
+description = "AIC pipeline backend"
+readme = "README.md"
+authors = [
+    { name = "Nguyen Minh Phu", email = "minfus391@gmail.com" }
+]
+requires-python = ">=3.11.3"
+dependencies = []
+
+[project.scripts]
+aic-pipeline = "aic_pipeline:main"
+
+[build-system]
+requires = ["uv_build>=0.9.26,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "black>=26.5.1",
+    "isort>=8.0.1",
+    "pre-commit>=4.6.0",
+    "pytest>=9.1.1",
+]
