@@ -2,7 +2,6 @@
 
 ## Phạm vi tài liệu
 
-- `[Verified]` Nguồn duy nhất của tài liệu này là `/Users/miphu/Downloads/Seminar-HCMAIC26.pdf`.
 - `[Verified]` PDF có `66` trang, tiêu đề `Seminar-HCMAIC26`, được tạo ngày `2026-07-03`.
 - `[Verified]` Mọi kết luận bên dưới đều bám theo nội dung PDF; phần nào suy ra thêm sẽ được gắn nhãn `[Inferred]`.
 
