@@ -7,7 +7,9 @@ authors = [
     { name = "Nguyen Minh Phu", email = "minfus391@gmail.com" }
 ]
 requires-python = ">=3.11.3"
-dependencies = []
+dependencies = [
+    "pydantic>=2.0.0",
+]
 
 [project.scripts]
 aic-pipeline = "aic_pipeline:main"
