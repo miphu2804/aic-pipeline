@@ -37,12 +37,12 @@ These are inferred targets for implementation:
 
 | Variable | Purpose | Default for local |
 |---|---|---|
-| `AIC_PIPELINE_ENV` | Runtime profile. | `local` |
-| `AIC_PIPELINE_DB_URL` | Metadata store. | `sqlite:///./data/aic_pipeline.db` |
-| `AIC_PIPELINE_ARTIFACT_DIR` | Artifact root. | `./artifacts` |
-| `AIC_PIPELINE_MEDIA_ROOT` | Base path for raw media. | unset, required for real corpus |
-| `AIC_PIPELINE_TEXT_INDEX_URL` | Text index service URL if using Meilisearch. | `http://localhost:7700` |
-| `AIC_PIPELINE_LOG_LEVEL` | Structured logging level. | `INFO` |
+| `PIPELINE_METADATA_DB_URL` | Metadata/control-plane store for catalog, runs, sessions and artifact registry. | `sqlite:///./data/pipeline_metadata.db` |
+| `PIPELINE_ARTIFACT_DIR` | Artifact root for manifests, keyframes, text-index snapshots, vector-index files and eval reports. | `./artifacts` |
+| `PIPELINE_MEDIA_ROOT` | Base path for raw media. | unset, required for real corpus |
+| `PIPELINE_TEXT_INDEX_URL` | Text index service URL for OCR/ASR branches if using Meilisearch or equivalent. | `http://localhost:7700` |
+| `PIPELINE_VECTOR_INDEX_DIR` | Local FAISS/vector artifact directory for semantic/color/image embedding branches. | `./artifacts/vector-index` |
+| `PIPELINE_LOG_LEVEL` | Structured logging level. | `INFO` |
 
 ## Target local runbook
 
@@ -101,4 +101,3 @@ uv run aic-pipeline eval run --query-set ../data/sample/query_set.json
 ## BRDS traceability
 
 Local setup supports FR-14, NFR-01, NFR-05, NFR-06, NFR-09 and NFR-10.
-
