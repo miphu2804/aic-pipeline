@@ -14,3 +14,11 @@ htmlcov/
 .venv/
 venv/
 env/
+
+# Local-only docs (keep on machine, don't sync)
+docs/brds/
+docs/technical/
+
+# Agent instructions (local only)
+AGENTS.md
+CLAUDE.md
