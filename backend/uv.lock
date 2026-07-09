@@ -13,6 +13,8 @@ source = { editable = "." }
 dependencies = [
     { name = "av" },
     { name = "fastapi" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "pydantic-settings" },
     { name = "uvicorn" },
 ]
@@ -22,8 +24,6 @@ dev = [
     { name = "black" },
     { name = "httpx2" },
     { name = "isort" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "pre-commit" },
     { name = "pytest" },
 ]
@@ -32,6 +32,7 @@ dev = [
 requires-dist = [
     { name = "av", specifier = ">=18.0.0" },
     { name = "fastapi", specifier = ">=0.139.0" },
+    { name = "numpy", specifier = ">=2.0" },
     { name = "pydantic-settings", specifier = ">=2.14.2" },
     { name = "uvicorn", specifier = ">=0.49.0" },
 ]
@@ -41,7 +42,6 @@ dev = [
     { name = "black", specifier = ">=26.5.1" },
     { name = "httpx2", specifier = ">=2.5.0" },
     { name = "isort", specifier = ">=8.0.1" },
-    { name = "numpy", specifier = ">=2.0" },
     { name = "pre-commit", specifier = ">=4.6.0" },
     { name = "pytest", specifier = ">=9.1.1" },
 ]

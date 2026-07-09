@@ -12,6 +12,13 @@ class DakeKeyframeCandidate(BaseModel):
     steepness: float
 
 
+class CadreKeyframe(BaseModel):
+    """A keyframe selected by CADRE (representative-frame extraction)."""
+
+    frame_index: int
+    timestamp_seconds: float
+
+
 class KeyframeExtractionResponse(BaseModel):
     frame_index: int
     timestamp: float
