@@ -82,6 +82,7 @@ def dake_ucese(
 
 def cadre(
     sizes: list[int],
+    sig,
     fps: float,
     *,
     rho: float = TARGET_KEYFRAME_RATIO,
@@ -91,11 +92,11 @@ def cadre(
     """CADRE — Change-point Anchored Density-adaptive Representative Extraction.
 
     Built incrementally by the autoresearch loop, one component per iteration.
+    ``sig`` is the per-frame coarse colour signature (float32 [n, 48]); the paper's
+    size-only signal (``sizes``) tops out around uniform sampling, so CADRE leans on
+    the cheap colour descriptor the decoder produces for free.
 
-    [iter 1] Non-max suppression on the steepness signal: instead of taking the raw
-    top-rho% (which clusters at a single busy region), greedily take the highest-
-    steepness frame, then forbid further picks within a gap G, and repeat.  This
-    spreads keyframes across the clip while staying biased toward content change.
+    [iter 1] Non-max suppression on the steepness signal (size-only).
     """
     n = len(sizes)
     if n < 2:
@@ -124,8 +125,8 @@ def cadre(
 def run() -> None:
     deadline = time.time() + TIME_BUDGET_SECONDS
 
-    def algorithm(sizes: list[int], fps: float) -> list[int]:
-        return cadre(sizes, fps, rho=TARGET_KEYFRAME_RATIO, window=3, warmup=0)
+    def algorithm(sizes: list[int], sig, fps: float) -> list[int]:
+        return cadre(sizes, sig, fps, rho=TARGET_KEYFRAME_RATIO, window=3, warmup=0)
 
     val_loss = 1.0
     iterations = 0
