@@ -1,8 +1,7 @@
 """DAKE-VBS experiment — the agent edits ONLY this file.
 
-Baseline: U-CESE steepness algorithm (Algorithm 1 from the paper), rho-based selection.
-
 Experiment log (newest first):
+  - [iter 2] tau threshold: select all frames with steepness > tau instead of top-rho%
   - [baseline] rho=0.02, window=3, no floor sampling
 
 To run:
@@ -38,16 +37,20 @@ def calculate_steepness(s_i: float, s_j: float, i: int, j: int, s_max: float) ->
 def dake_vbs(
     sizes: list[int],
     *,
-    rho: float = 0.02,
+    tau: float = 0.3,
     window: int = 3,
     warmup: int = 0,
 ) -> list[int]:
-    """Baseline U-CESE Algorithm 1: select top rho*n frames by steepness.
+    """U-CESE with tau threshold: select frames whose steepness exceeds tau.
+
+    Unlike rho (ratio), tau is an absolute threshold so frame count adapts to
+    actual content complexity — busy scenes yield more keyframes, static scenes
+    yield fewer, with no artificial floor.
 
     Parameters
     ----------
     sizes   : per-frame JPEG sizes
-    rho     : fraction of frames to select (0 < rho <= 1)
+    tau     : steepness threshold in [0, 1]; frames above this are selected
     window  : forward neighbour window for steepness averaging
     warmup  : skip the first N frames (I-frame codec transient avoidance)
     """
@@ -65,13 +68,12 @@ def dake_vbs(
             count += 1
         scored.append((i, total / count if count > 0 else 0.0))
 
-    eligible = [(idx, s) for idx, s in scored if idx >= warmup]
-    if not eligible:
-        return []
-
-    eligible.sort(key=lambda x: x[1], reverse=True)
-    k = max(1, int(rho * n))
-    selected = sorted(idx for idx, _ in eligible[:k])
+    selected = sorted(idx for idx, s in scored if idx >= warmup and s > tau)
+    # Always select at least one frame (the highest steepness) to avoid empty output.
+    if not selected and scored:
+        eligible = [(idx, s) for idx, s in scored if idx >= warmup]
+        if eligible:
+            selected = [max(eligible, key=lambda x: x[1])[0]]
     return selected
 
 
@@ -84,7 +86,7 @@ def run() -> None:
 
     # Wrap algorithm so evaluate() can call it with just (sizes,).
     def algorithm(sizes: list[int]) -> list[int]:
-        return dake_vbs(sizes, rho=0.02, window=3, warmup=0)
+        return dake_vbs(sizes, tau=0.3, window=3, warmup=0)
 
     # Repeat evaluation until the time budget is exhausted (ensures
     # each experiment consumes the same wall-clock slot).
