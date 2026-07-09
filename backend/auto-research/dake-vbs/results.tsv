@@ -1,0 +1,2 @@
+iteration	val_loss	idea	keep
+1	0.235294	baseline: rho=0.02 window=3 warmup=0	seed
