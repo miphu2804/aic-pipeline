@@ -1,7 +1,8 @@
 """DAKE-VBS experiment — the agent edits ONLY this file.
 
 Experiment log (newest first):
-  - [iter 6] exponential smoothing on steepness curve before thresholding (alpha=0.4)
+  - [iter 7] size ratio signal: hybrid steepness = (ucese + log_ratio) / 2
+  - [iter 6] EXP SMOOTH DISCARDED — dampens peaks, misses events (0.1765)
   - [iter 4] raise tau=0.5 to reduce false-alarm firing in noisy regions
   - [iter 3] minimum gap dedup: after tau selection, merge frames within G frames, keep highest steepness
   - [iter 2] tau threshold: select all frames with steepness > tau instead of top-rho%
@@ -27,14 +28,28 @@ from prepare import TIME_BUDGET_SECONDS, SEED, evaluate  # noqa: E402
 # ---------------------------------------------------------------------------
 
 def calculate_steepness(s_i: float, s_j: float, i: int, j: int, s_max: float) -> float:
-    """Normalised rate of change between two frames (U-CESE eq. 4.1)."""
-    if s_max <= 0:
+    """Hybrid signal: average of U-CESE steepness and normalised log-size ratio.
+
+    Log ratio log(s_j/s_i) is scale-invariant (works across different video
+    resolutions/quality settings) and complements the U-CESE absolute-delta signal.
+    Both components are normalised to [0, 1].
+    """
+    if s_max <= 0 or s_i <= 0 or s_j <= 0:
         return 0.0
+
+    # Component 1: U-CESE absolute steepness
     delta = 100.0 * abs((s_j - s_i) / s_max)
     d = abs(j - i)
     if d == 0:
-        return 1.0 if delta > 0 else 0.0
-    return delta / math.sqrt(d**2 + delta**2)
+        ucese = 1.0 if delta > 0 else 0.0
+    else:
+        ucese = delta / math.sqrt(d**2 + delta**2)
+
+    # Component 2: log-ratio normalised via tanh (output in [0, 1])
+    log_r = abs(math.log(s_j / s_i))
+    ratio_signal = math.tanh(log_r)  # 2x size change → tanh(ln2) ≈ 0.60
+
+    return (ucese + ratio_signal) / 2.0
 
 
 def dake_vbs(
@@ -71,26 +86,17 @@ def dake_vbs(
             count += 1
         scored.append((i, total / count if count > 0 else 0.0))
 
-    # Exponential smoothing: damp single-frame spikes before thresholding.
-    # s_smooth[i] = alpha * s_raw[i] + (1 - alpha) * s_smooth[i-1]
-    alpha = 0.4
-    smoothed: list[tuple[int, float]] = []
-    prev = 0.0
-    for idx, s in scored:
-        sm = alpha * s + (1 - alpha) * prev
-        smoothed.append((idx, sm))
-        prev = sm
-
-    candidates = [(idx, s) for idx, s in smoothed if idx >= warmup and s > tau]
+    candidates = [(idx, s) for idx, s in scored if idx >= warmup and s > tau]
     # Always select at least one frame (the highest steepness) to avoid empty output.
-    if not candidates and smoothed:
-        eligible = [(idx, s) for idx, s in smoothed if idx >= warmup]
+    if not candidates and scored:
+        eligible = [(idx, s) for idx, s in scored if idx >= warmup]
         if eligible:
             candidates = [max(eligible, key=lambda x: x[1])]
 
-    # Minimum-gap deduplication
-    gap = 5
-    steepness_map = dict(smoothed)
+    # Minimum-gap deduplication: within any window of G consecutive frames,
+    # keep only the frame with the highest steepness.
+    gap = 5  # frames; ~0.2 s at 25 fps
+    steepness_map = dict(scored)
     deduped: list[int] = []
     for idx, _s in sorted(candidates, key=lambda x: x[0]):
         if deduped and idx - deduped[-1] < gap:
