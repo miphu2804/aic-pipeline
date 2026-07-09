@@ -113,7 +113,7 @@ def cadre(
     fps: float,
     *,
     rho: float = TARGET_KEYFRAME_RATIO,
-    kmul: float = 1.3,
+    kmul: float = 1.0,
     warmup: int = 0,
 ) -> list[int]:
     """CADRE — Change-point Anchored Density-adaptive Representative Extraction.
@@ -123,13 +123,15 @@ def cadre(
     instead selects on the cheap 4x4 colour signature the decoder yields for free.
 
     [iter 2] Facility-location core: greedily choose the k frames that best represent
-    the whole clip in signature space, where k = rho * n * kmul.
+             the whole clip in signature space.
+    [iter 4] Budget = ceil(rho * n): keeping the fractional keyframe (int() dropped it)
+             lands squarely on the rep/budget optimum instead of overshooting.
     """
     n = len(sizes)
     if n < 2:
         return list(range(n))
 
-    k = min(n, max(1, int(rho * n * kmul)))
+    k = min(n, max(1, math.ceil(rho * n * kmul)))
     return _facility_location(np.asarray(sig, dtype=np.float64), k)
 
 
@@ -140,7 +142,7 @@ def run() -> None:
     deadline = time.time() + TIME_BUDGET_SECONDS
 
     def algorithm(sizes: list[int], sig, fps: float) -> list[int]:
-        return cadre(sizes, sig, fps, rho=TARGET_KEYFRAME_RATIO, kmul=1.3, warmup=0)
+        return cadre(sizes, sig, fps, rho=TARGET_KEYFRAME_RATIO, kmul=1.0, warmup=0)
 
     val_loss = 1.0
     iterations = 0
