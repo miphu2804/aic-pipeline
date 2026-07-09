@@ -4,3 +4,6 @@
 cache/
 run.log
 results.tsv
+mlruns/
+mlflow.db
+mlartifacts/
