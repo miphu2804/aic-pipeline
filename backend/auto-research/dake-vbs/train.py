@@ -1,6 +1,7 @@
 """DAKE-VBS experiment — the agent edits ONLY this file.
 
 Experiment log (newest first):
+  - [iter 4] raise tau=0.5 to reduce false-alarm firing in noisy regions
   - [iter 3] minimum gap dedup: after tau selection, merge frames within G frames, keep highest steepness
   - [iter 2] tau threshold: select all frames with steepness > tau instead of top-rho%
   - [baseline] rho=0.02, window=3, no floor sampling
@@ -38,7 +39,7 @@ def calculate_steepness(s_i: float, s_j: float, i: int, j: int, s_max: float) ->
 def dake_vbs(
     sizes: list[int],
     *,
-    tau: float = 0.3,
+    tau: float = 0.5,
     window: int = 3,
     warmup: int = 0,
 ) -> list[int]:
@@ -101,7 +102,7 @@ def run() -> None:
 
     # Wrap algorithm so evaluate() can call it with just (sizes,).
     def algorithm(sizes: list[int]) -> list[int]:
-        return dake_vbs(sizes, tau=0.3, window=3, warmup=0)
+        return dake_vbs(sizes, tau=0.5, window=3, warmup=0)
 
     # Repeat evaluation until the time budget is exhausted (ensures
     # each experiment consumes the same wall-clock slot).
