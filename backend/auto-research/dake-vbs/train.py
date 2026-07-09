@@ -1,6 +1,7 @@
 """DAKE-VBS experiment — the agent edits ONLY this file.
 
 Experiment log (newest first):
+  - [iter 6] exponential smoothing on steepness curve before thresholding (alpha=0.4)
   - [iter 4] raise tau=0.5 to reduce false-alarm firing in noisy regions
   - [iter 3] minimum gap dedup: after tau selection, merge frames within G frames, keep highest steepness
   - [iter 2] tau threshold: select all frames with steepness > tau instead of top-rho%
@@ -70,22 +71,29 @@ def dake_vbs(
             count += 1
         scored.append((i, total / count if count > 0 else 0.0))
 
-    candidates = [(idx, s) for idx, s in scored if idx >= warmup and s > tau]
+    # Exponential smoothing: damp single-frame spikes before thresholding.
+    # s_smooth[i] = alpha * s_raw[i] + (1 - alpha) * s_smooth[i-1]
+    alpha = 0.4
+    smoothed: list[tuple[int, float]] = []
+    prev = 0.0
+    for idx, s in scored:
+        sm = alpha * s + (1 - alpha) * prev
+        smoothed.append((idx, sm))
+        prev = sm
+
+    candidates = [(idx, s) for idx, s in smoothed if idx >= warmup and s > tau]
     # Always select at least one frame (the highest steepness) to avoid empty output.
-    if not candidates and scored:
-        eligible = [(idx, s) for idx, s in scored if idx >= warmup]
+    if not candidates and smoothed:
+        eligible = [(idx, s) for idx, s in smoothed if idx >= warmup]
         if eligible:
             candidates = [max(eligible, key=lambda x: x[1])]
 
-    # Minimum-gap deduplication: within any window of G consecutive frames,
-    # keep only the frame with the highest steepness.  This collapses burst
-    # clusters produced by hard cuts without discarding the event landmark.
-    gap = 5  # frames; ~0.2 s at 25 fps
-    steepness_map = dict(scored)
+    # Minimum-gap deduplication
+    gap = 5
+    steepness_map = dict(smoothed)
     deduped: list[int] = []
     for idx, _s in sorted(candidates, key=lambda x: x[0]):
         if deduped and idx - deduped[-1] < gap:
-            # Replace previous if this frame is steeper.
             if steepness_map.get(idx, 0) > steepness_map.get(deduped[-1], 0):
                 deduped[-1] = idx
         else:

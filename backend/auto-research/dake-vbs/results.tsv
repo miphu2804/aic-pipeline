@@ -1,3 +1,6 @@
 iteration	val_loss	idea	keep
-2	0.150000	tau=0.3 threshold (adaptive count, perfect recall but over-budget)	KEEP
+5	0.067391	floor sampling every 75 frames — over-budget on long slides	DISCARD
+4	0.064130	tau=0.5 + dedup gap=5 — within budget, recall≈93.5%	KEEP (best)
+3	0.150000	tau=0.3 + dedup gap=5 — perfect recall but over-budget cap	discard
+2	0.150000	tau=0.3 threshold (adaptive count, perfect recall but over-budget)	KEEP (arch)
 1	0.235294	baseline: rho=0.02 window=3 warmup=0	seed
