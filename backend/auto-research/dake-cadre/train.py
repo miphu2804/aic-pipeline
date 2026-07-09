@@ -113,7 +113,7 @@ def cadre(
     fps: float,
     *,
     rho: float = TARGET_KEYFRAME_RATIO,
-    kmul: float = 1.0,
+    kmul: float = 1.3,
     warmup: int = 0,
 ) -> list[int]:
     """CADRE — Change-point Anchored Density-adaptive Representative Extraction.
@@ -140,7 +140,7 @@ def run() -> None:
     deadline = time.time() + TIME_BUDGET_SECONDS
 
     def algorithm(sizes: list[int], sig, fps: float) -> list[int]:
-        return cadre(sizes, sig, fps, rho=TARGET_KEYFRAME_RATIO, kmul=1.0, warmup=0)
+        return cadre(sizes, sig, fps, rho=TARGET_KEYFRAME_RATIO, kmul=1.3, warmup=0)
 
     val_loss = 1.0
     iterations = 0
