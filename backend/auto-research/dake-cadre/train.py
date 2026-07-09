@@ -82,19 +82,21 @@ def dake_ucese(
     return sorted(i for i, _ in eligible[:k])
 
 
-def _facility_location(sig: np.ndarray, k: int) -> list[int]:
+def _pairwise_dist(sig: np.ndarray) -> np.ndarray:
+    """Euclidean distance matrix over the per-frame coarse signatures."""
+    gram = sig @ sig.T
+    sq = np.diag(gram)
+    return np.sqrt(np.clip(sq[:, None] - 2.0 * gram + sq[None, :], 0.0, None))
+
+
+def _facility_location(dist: np.ndarray, k: int) -> list[int]:
     """Greedy facility-location: pick k frames minimising the mean distance from every
-    frame to its nearest selected frame, in coarse-signature space.
+    frame to its nearest selected frame.
 
     This is the representativeness objective the referee scores, approximated online
     with the classic greedy (each step adds the frame that most reduces the mean
     nearest-neighbour distance).  Seed = the medoid (frame nearest all others).
     """
-    n = sig.shape[0]
-    gram = sig @ sig.T
-    sq = np.diag(gram)
-    dist = np.sqrt(np.clip(sq[:, None] - 2.0 * gram + sq[None, :], 0.0, None))
-
     start = int(dist.mean(axis=1).argmin())
     selected = [start]
     nearest = dist[start].copy()
@@ -104,7 +106,34 @@ def _facility_location(sig: np.ndarray, k: int) -> list[int]:
             break
         selected.append(nxt)
         nearest = np.minimum(nearest, dist[nxt])
-    return sorted(set(selected))
+    return selected
+
+
+def _local_search(dist: np.ndarray, selected: list[int], rounds: int = 4) -> list[int]:
+    """Teitz-Bart local search: repeatedly replace one selected frame with the frame
+    that most lowers the mean nearest-neighbour distance, until no swap helps.
+
+    Greedy facility-location is only 1-optimal; a few swap rounds reach a much better
+    local optimum (and, empirically here, below the greedy representativeness floor).
+    """
+    n = dist.shape[0]
+    sel = list(selected)
+    cur = dist[:, sel].min(axis=1).mean()
+    for _ in range(rounds):
+        improved = False
+        for slot in range(len(sel)):
+            others = sel[:slot] + sel[slot + 1:]
+            base = dist[:, others].min(axis=1) if others else np.full(n, dist.max())
+            # For each candidate column c, mean over frames of min(base, dist[:, c]).
+            cand = np.minimum(base[:, None], dist).mean(axis=0)
+            cand[others] = np.inf              # never duplicate an existing keyframe
+            best = int(cand.argmin())
+            if cand[best] < cur - 1e-12:
+                sel[slot], cur = best, float(cand[best])
+                improved = True
+        if not improved:
+            break
+    return sorted(set(sel))
 
 
 def cadre(
@@ -126,13 +155,15 @@ def cadre(
              the whole clip in signature space.
     [iter 4] Budget = ceil(rho * n): keeping the fractional keyframe (int() dropped it)
              lands squarely on the rep/budget optimum instead of overshooting.
+    [iter 5] Teitz-Bart local search refines the greedy set past its 1-optimal floor.
     """
     n = len(sizes)
     if n < 2:
         return list(range(n))
 
     k = min(n, max(1, math.ceil(rho * n * kmul)))
-    return _facility_location(np.asarray(sig, dtype=np.float64), k)
+    dist = _pairwise_dist(np.asarray(sig, dtype=np.float64))
+    return _local_search(dist, _facility_location(dist, k))
 
 
 # ---------------------------------------------------------------------------
