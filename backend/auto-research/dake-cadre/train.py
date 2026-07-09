@@ -18,6 +18,8 @@ import math
 import sys
 import time
 
+import numpy as np
+
 sys.path.insert(0, "auto-research/dake-cadre")
 
 from prepare import TARGET_KEYFRAME_RATIO, TIME_BUDGET_SECONDS, evaluate  # noqa: E402
@@ -80,43 +82,55 @@ def dake_ucese(
     return sorted(i for i, _ in eligible[:k])
 
 
+def _facility_location(sig: np.ndarray, k: int) -> list[int]:
+    """Greedy facility-location: pick k frames minimising the mean distance from every
+    frame to its nearest selected frame, in coarse-signature space.
+
+    This is the representativeness objective the referee scores, approximated online
+    with the classic greedy (each step adds the frame that most reduces the mean
+    nearest-neighbour distance).  Seed = the medoid (frame nearest all others).
+    """
+    n = sig.shape[0]
+    gram = sig @ sig.T
+    sq = np.diag(gram)
+    dist = np.sqrt(np.clip(sq[:, None] - 2.0 * gram + sq[None, :], 0.0, None))
+
+    start = int(dist.mean(axis=1).argmin())
+    selected = [start]
+    nearest = dist[start].copy()
+    while len(selected) < k:
+        nxt = int(np.minimum(nearest[None, :], dist).mean(axis=1).argmin())
+        if nxt in selected:
+            break
+        selected.append(nxt)
+        nearest = np.minimum(nearest, dist[nxt])
+    return sorted(set(selected))
+
+
 def cadre(
     sizes: list[int],
-    sig,
+    sig: np.ndarray,
     fps: float,
     *,
     rho: float = TARGET_KEYFRAME_RATIO,
-    window: int = 3,
+    kmul: float = 1.0,
     warmup: int = 0,
 ) -> list[int]:
     """CADRE — Change-point Anchored Density-adaptive Representative Extraction.
 
     Built incrementally by the autoresearch loop, one component per iteration.
-    ``sig`` is the per-frame coarse colour signature (float32 [n, 48]); the paper's
-    size-only signal (``sizes``) tops out around uniform sampling, so CADRE leans on
-    the cheap colour descriptor the decoder produces for free.
+    The paper's size-only signal tops out around uniform sampling (~0.363); CADRE
+    instead selects on the cheap 4x4 colour signature the decoder yields for free.
 
-    [iter 1] Non-max suppression on the steepness signal (size-only).
+    [iter 2] Facility-location core: greedily choose the k frames that best represent
+    the whole clip in signature space, where k = rho * n * kmul.
     """
     n = len(sizes)
     if n < 2:
         return list(range(n))
 
-    steep = _frame_steepness(sizes, window)
-    order = sorted(
-        (i for i in range(n) if i >= warmup), key=lambda i: steep[i], reverse=True
-    )
-
-    k = max(1, int(rho * n))
-    gap = max(1, int(0.6 * n / k))   # ~spread the k picks across the clip
-
-    picked: list[int] = []
-    for idx in order:
-        if all(abs(idx - p) >= gap for p in picked):
-            picked.append(idx)
-            if len(picked) >= k:
-                break
-    return sorted(picked)
+    k = min(n, max(1, int(rho * n * kmul)))
+    return _facility_location(np.asarray(sig, dtype=np.float64), k)
 
 
 # ---------------------------------------------------------------------------
