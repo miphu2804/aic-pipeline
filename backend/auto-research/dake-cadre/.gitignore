@@ -1,0 +1,6 @@
+# Working artifacts of the autoresearch loop — must stay untracked so that
+# `git reset --hard` on a discarded iteration never wipes the experiment log
+# or forces a costly feature-cache rebuild.
+cache/
+run.log
+results.tsv
