@@ -80,6 +80,44 @@ def dake_ucese(
     return sorted(i for i, _ in eligible[:k])
 
 
+def cadre(
+    sizes: list[int],
+    fps: float,
+    *,
+    rho: float = TARGET_KEYFRAME_RATIO,
+    window: int = 3,
+    warmup: int = 0,
+) -> list[int]:
+    """CADRE — Change-point Anchored Density-adaptive Representative Extraction.
+
+    Built incrementally by the autoresearch loop, one component per iteration.
+
+    [iter 1] Non-max suppression on the steepness signal: instead of taking the raw
+    top-rho% (which clusters at a single busy region), greedily take the highest-
+    steepness frame, then forbid further picks within a gap G, and repeat.  This
+    spreads keyframes across the clip while staying biased toward content change.
+    """
+    n = len(sizes)
+    if n < 2:
+        return list(range(n))
+
+    steep = _frame_steepness(sizes, window)
+    order = sorted(
+        (i for i in range(n) if i >= warmup), key=lambda i: steep[i], reverse=True
+    )
+
+    k = max(1, int(rho * n))
+    gap = max(1, int(0.6 * n / k))   # ~spread the k picks across the clip
+
+    picked: list[int] = []
+    for idx in order:
+        if all(abs(idx - p) >= gap for p in picked):
+            picked.append(idx)
+            if len(picked) >= k:
+                break
+    return sorted(picked)
+
+
 # ---------------------------------------------------------------------------
 # Timed runner — do NOT remove the val_loss / peak_mem_mb print lines
 # ---------------------------------------------------------------------------
@@ -87,7 +125,7 @@ def run() -> None:
     deadline = time.time() + TIME_BUDGET_SECONDS
 
     def algorithm(sizes: list[int], fps: float) -> list[int]:
-        return dake_ucese(sizes, fps, rho=TARGET_KEYFRAME_RATIO, window=3, warmup=0)
+        return cadre(sizes, fps, rho=TARGET_KEYFRAME_RATIO, window=3, warmup=0)
 
     val_loss = 1.0
     iterations = 0
