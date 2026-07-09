@@ -1,6 +1,7 @@
 """DAKE-VBS experiment — the agent edits ONLY this file.
 
 Experiment log (newest first):
+  - [iter 3] minimum gap dedup: after tau selection, merge frames within G frames, keep highest steepness
   - [iter 2] tau threshold: select all frames with steepness > tau instead of top-rho%
   - [baseline] rho=0.02, window=3, no floor sampling
 
@@ -68,13 +69,27 @@ def dake_vbs(
             count += 1
         scored.append((i, total / count if count > 0 else 0.0))
 
-    selected = sorted(idx for idx, s in scored if idx >= warmup and s > tau)
+    candidates = [(idx, s) for idx, s in scored if idx >= warmup and s > tau]
     # Always select at least one frame (the highest steepness) to avoid empty output.
-    if not selected and scored:
+    if not candidates and scored:
         eligible = [(idx, s) for idx, s in scored if idx >= warmup]
         if eligible:
-            selected = [max(eligible, key=lambda x: x[1])[0]]
-    return selected
+            candidates = [max(eligible, key=lambda x: x[1])]
+
+    # Minimum-gap deduplication: within any window of G consecutive frames,
+    # keep only the frame with the highest steepness.  This collapses burst
+    # clusters produced by hard cuts without discarding the event landmark.
+    gap = 5  # frames; ~0.2 s at 25 fps
+    steepness_map = dict(scored)
+    deduped: list[int] = []
+    for idx, _s in sorted(candidates, key=lambda x: x[0]):
+        if deduped and idx - deduped[-1] < gap:
+            # Replace previous if this frame is steeper.
+            if steepness_map.get(idx, 0) > steepness_map.get(deduped[-1], 0):
+                deduped[-1] = idx
+        else:
+            deduped.append(idx)
+    return deduped
 
 
 # ---------------------------------------------------------------------------
