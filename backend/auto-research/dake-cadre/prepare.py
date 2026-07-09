@@ -26,6 +26,7 @@ loop's job is to get as close to that floor as possible, cheaply.
 val_loss = (1 - LAMBDA) * representativeness_error_norm  +  LAMBDA * budget_penalty
 PRIMARY_DIRECTION = "min"   → lower is better.
 """
+
 from __future__ import annotations
 
 import glob
@@ -47,11 +48,11 @@ TIME_BUDGET_SECONDS: int = 25
 SEED: int = 42
 PRIMARY_DIRECTION: str = "min"
 
-NUM_VIDEOS: int = 60          # how many MSR-VTT clips form the benchmark
-MAX_FRAMES: int = 320         # cap per clip (stride-subsample longer clips)
-THUMB_GRID: int = 8           # 8x8x3 = 192-d content descriptor — the METRIC feature
-SIG_GRID: int = 4             # 4x4x3 = 48-d coarse signature handed to the ALGORITHM
-JPEG_QSCALE: int = 2          # ffmpeg mjpeg qscale (matches production extractor)
+NUM_VIDEOS: int = 60  # how many MSR-VTT clips form the benchmark
+MAX_FRAMES: int = 320  # cap per clip (stride-subsample longer clips)
+THUMB_GRID: int = 8  # 8x8x3 = 192-d content descriptor — the METRIC feature
+SIG_GRID: int = 4  # 4x4x3 = 48-d coarse signature handed to the ALGORITHM
+JPEG_QSCALE: int = 2  # ffmpeg mjpeg qscale (matches production extractor)
 
 # Keyframe budget: selecting more than this fraction of frames is penalised.
 TARGET_KEYFRAME_RATIO: float = 0.03
@@ -75,11 +76,13 @@ _CACHE_PATH = os.path.join(
 @dataclass
 class Clip:
     name: str
-    sizes: np.ndarray       # int32 [n]   — per-frame JPEG byte size (the paper's DAKE input)
-    sig: np.ndarray         # float32 [n, 48] — per-frame coarse colour signature (CADRE input)
-    feats: np.ndarray       # float32 [n, 192] — per-frame 8x8 thumbnail (METRIC ground truth)
+    sizes: np.ndarray  # int32 [n]   — per-frame JPEG byte size (the paper's DAKE input)
+    sig: np.ndarray  # float32 [n, 48] — per-frame coarse colour signature (CADRE input)
+    feats: (
+        np.ndarray
+    )  # float32 [n, 192] — per-frame 8x8 thumbnail (METRIC ground truth)
     fps: float
-    norm: float             # per-clip representativeness normaliser (feature spread)
+    norm: float  # per-clip representativeness normaliser (feature spread)
 
 
 def _thumbnail(rgb: np.ndarray, g: int = THUMB_GRID) -> np.ndarray:
@@ -120,8 +123,8 @@ def _encode_clip(path: str) -> Clip | None:
             jf.time_base = encoder.time_base
             sizes.append(sum(pk.size for pk in encoder.encode(jf)))
             rgb = frame.to_ndarray(format="rgb24")
-            feats.append(_thumbnail(rgb, THUMB_GRID))   # metric feature
-            sigs.append(_thumbnail(rgb, SIG_GRID))      # coarse signature for the algorithm
+            feats.append(_thumbnail(rgb, THUMB_GRID))  # metric feature
+            sigs.append(_thumbnail(rgb, SIG_GRID))  # coarse signature for the algorithm
 
     if len(sizes) < 4:
         return None
@@ -193,7 +196,7 @@ CLIPS: list[Clip] = load_clips()
 # ---------------------------------------------------------------------------
 def _representativeness_error(feats: np.ndarray, selected: list[int]) -> float:
     """Mean over all frames of the distance to the nearest selected keyframe."""
-    sel = feats[selected]                                   # [k, d]
+    sel = feats[selected]  # [k, d]
     # Squared euclidean via (a-b)^2 = |a|^2 + |b|^2 - 2 a.b, then min over keyframes.
     d2 = (
         (feats * feats).sum(axis=1, keepdims=True)
@@ -232,7 +235,7 @@ def evaluate(
         selected = sorted({i for i in selected if 0 <= i < n})
 
         if not selected:
-            losses.append(1.0 - BUDGET_LAMBDA)   # empty output = worst coverage
+            losses.append(1.0 - BUDGET_LAMBDA)  # empty output = worst coverage
             continue
 
         rep = _representativeness_error(clip.feats, selected) / clip.norm
@@ -240,7 +243,9 @@ def evaluate(
 
         used_ratio = len(selected) / n
         # Linear ramp: no penalty at/under target, full penalty at 3x target.
-        over = max(0.0, used_ratio - TARGET_KEYFRAME_RATIO) / (2.0 * TARGET_KEYFRAME_RATIO)
+        over = max(0.0, used_ratio - TARGET_KEYFRAME_RATIO) / (
+            2.0 * TARGET_KEYFRAME_RATIO
+        )
         budget_penalty = min(1.0, over)
 
         losses.append((1.0 - BUDGET_LAMBDA) * rep + BUDGET_LAMBDA * budget_penalty)
@@ -253,8 +258,10 @@ def evaluate(
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     tot_frames = sum(int(c.sizes.shape[0]) for c in CLIPS)
-    print(f"loaded {len(CLIPS)} clips, {tot_frames} frames "
-          f"(avg {tot_frames / max(len(CLIPS), 1):.0f}/clip)")
+    print(
+        f"loaded {len(CLIPS)} clips, {tot_frames} frames "
+        f"(avg {tot_frames / max(len(CLIPS), 1):.0f}/clip)"
+    )
 
     def sel_none(sizes, sig, fps):
         return []

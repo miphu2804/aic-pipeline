@@ -12,6 +12,7 @@ To run:
     cd backend
     uv run python auto-research/dake-cadre/train.py > auto-research/dake-cadre/run.log 2>&1
 """
+
 from __future__ import annotations
 
 import math
@@ -22,7 +23,11 @@ import numpy as np
 
 sys.path.insert(0, "auto-research/dake-cadre")
 
-from prepare import TARGET_KEYFRAME_RATIO, TIME_BUDGET_SECONDS, evaluate  # noqa: E402
+from prepare import (  # noqa: E402  # isort:skip
+    TARGET_KEYFRAME_RATIO,
+    TIME_BUDGET_SECONDS,
+    evaluate,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -122,11 +127,11 @@ def _local_search(dist: np.ndarray, selected: list[int], rounds: int = 4) -> lis
     for _ in range(rounds):
         improved = False
         for slot in range(len(sel)):
-            others = sel[:slot] + sel[slot + 1:]
+            others = sel[:slot] + sel[slot + 1 :]
             base = dist[:, others].min(axis=1) if others else np.full(n, dist.max())
             # For each candidate column c, mean over frames of min(base, dist[:, c]).
             cand = np.minimum(base[:, None], dist).mean(axis=0)
-            cand[others] = np.inf              # never duplicate an existing keyframe
+            cand[others] = np.inf  # never duplicate an existing keyframe
             best = int(cand.argmin())
             if cand[best] < cur - 1e-12:
                 sel[slot], cur = best, float(cand[best])
@@ -182,7 +187,7 @@ def run() -> None:
         iterations += 1
 
     print(f"val_loss: {val_loss:.6f}")
-    print("peak_mem_mb: 0")   # size-only algorithm, no model — memory is not a concern
+    print("peak_mem_mb: 0")  # size-only algorithm, no model — memory is not a concern
     print(f"iterations: {iterations}", file=sys.stderr)
 
 
