@@ -6,6 +6,12 @@ this paper baseline on the real MSR-VTT representativeness metric by adding the
 named CADRE module (Change-point Anchored Density-adaptive Representative Extraction).
 
 Experiment log (newest first):
+  - [iter 9] DACS arc-length init replaces greedy facility-location + random restarts.
+             The clip is split into k segments of equal *accumulated visual change*
+             (arc length in signature space) and each segment's centroid frame seeds
+             the local search.  This is "dynamic-aware" sampling (busy stretches get
+             more segments, static stretches fewer); it ties the champion while
+             deleting two components (facility-location + restarts).
   - [baseline] U-CESE top-rho% steepness, rho=0.03 window=3 warmup=0
 
 To run:
@@ -95,24 +101,38 @@ def _pairwise_dist(sig: np.ndarray) -> np.ndarray:
     return np.sqrt(np.clip(sq[:, None] - 2.0 * gram + sq[None, :], 0.0, None))
 
 
-def _facility_location(dist: np.ndarray, k: int) -> list[int]:
-    """Greedy facility-location: pick k frames minimising the mean distance from every
-    frame to its nearest selected frame.
+def _arclength_init(sig: np.ndarray, k: int) -> list[int]:
+    """Dynamic-aware init: split the clip into k segments of equal *accumulated visual
+    change* and take each segment's centroid-nearest frame.
 
-    This is the representativeness objective the referee scores, approximated online
-    with the classic greedy (each step adds the frame that most reduces the mean
-    nearest-neighbour distance).  Seed = the medoid (frame nearest all others).
+    Consecutive-frame signature distances are the clip's per-frame "visual velocity".
+    Their cumulative sum is a content-arc-length; cutting it into k equal pieces places
+    more segments where content moves fast and fewer where it is static — the essence of
+    dynamic-aware keyframing.  Each segment contributes its most central (settled) frame,
+    which represents that stretch better than the arc-length crossing point.  O(n), no
+    distance matrix — a much cheaper seed than greedy facility-location.
     """
-    start = int(dist.mean(axis=1).argmin())
-    selected = [start]
-    nearest = dist[start].copy()
-    while len(selected) < k:
-        nxt = int(np.minimum(nearest[None, :], dist).mean(axis=1).argmin())
-        if nxt in selected:
-            break
-        selected.append(nxt)
-        nearest = np.minimum(nearest, dist[nxt])
-    return selected
+    n = len(sig)
+    if k <= 1 or n == 0:
+        return [0] if n else []
+    step = np.zeros(n)
+    step[1:] = np.linalg.norm(sig[1:] - sig[:-1], axis=1)
+    arc = np.cumsum(step)
+    total = float(arc[-1])
+    if total <= 1e-9:  # static clip → fall back to uniform temporal spacing
+        stride = max(1, n // k)
+        return sorted(set(range(stride // 2, n, stride)))
+    edges = total * np.arange(k + 1) / k
+    seg = np.clip(np.searchsorted(edges, arc, side="right") - 1, 0, k - 1)
+    init: list[int] = []
+    for s in range(k):
+        members = np.where(seg == s)[0]
+        if members.size:
+            centroid = sig[members].mean(axis=0)
+            init.append(
+                int(members[np.linalg.norm(sig[members] - centroid, axis=1).argmin()])
+            )
+    return sorted(set(init))
 
 
 def _local_search(dist: np.ndarray, selected: list[int], rounds: int = 4) -> list[int]:
@@ -149,7 +169,6 @@ def cadre(
     *,
     rho: float = TARGET_KEYFRAME_RATIO,
     kmax_mul: float = 3.0,
-    restarts: int = 2,
     warmup: int = 0,
 ) -> list[int]:
     """CADRE — Change-point Anchored Density-adaptive Representative Extraction.
@@ -158,15 +177,16 @@ def cadre(
     The paper's size-only signal tops out around uniform sampling (~0.363); CADRE
     instead selects on the cheap 4x4 colour signature the decoder yields for free.
 
-    [iter 2] Facility-location core: greedily choose the k frames that best represent
-             the whole clip in signature space.
     [iter 4] Budget = ceil(rho * n): keeping the fractional keyframe (int() dropped it)
              lands squarely on the rep/budget optimum instead of overshooting.
-    [iter 5] Teitz-Bart local search refines the greedy set past its 1-optimal floor.
+    [iter 5] Teitz-Bart local search refines the seed set past its 1-optimal floor.
     [iter 7] Density-adaptive budget: instead of a fixed count, grow the keyframe set
              and keep the size that minimises rep+budget on the signature — busy clips
              get more keyframes, static clips fewer.
-    [iter 8] A couple of random restarts per size escape weak local optima.
+    [iter 9] DACS arc-length seeding (``_arclength_init``) replaces greedy
+             facility-location + random restarts: the seed already respects the clip's
+             temporal/shot structure, so one local search per size matches the old
+             multi-restart search with far less machinery.
     """
     n = len(sizes)
     if n < 2:
@@ -177,21 +197,14 @@ def cadre(
     norm = float(np.linalg.norm(sig - sig.mean(axis=0), axis=1).mean()) or 1.0
 
     kmax = min(n, max(2, math.ceil(rho * n * kmax_mul)))
-    order = _facility_location(dist, kmax)
-    rng = np.random.RandomState(0)
-
-    best_sel, best_val = order[:1], math.inf
-    for k in range(1, len(order) + 1):
-        inits = [order[:k]] + [
-            rng.choice(n, k, replace=False).tolist() for _ in range(restarts)
-        ]
-        for init in inits:
-            sel = _local_search(dist, init)
-            rep = min(1.0, dist[:, sel].min(axis=1).mean() / norm)
-            over = max(0.0, len(sel) / n - rho) / (2.0 * rho)
-            val = (1.0 - BUDGET_LAMBDA) * rep + BUDGET_LAMBDA * min(1.0, over)
-            if val < best_val:
-                best_val, best_sel = val, sel
+    best_sel, best_val = [0], math.inf
+    for k in range(1, kmax + 1):
+        sel = _local_search(dist, _arclength_init(sig, k))
+        rep = min(1.0, dist[:, sel].min(axis=1).mean() / norm)
+        over = max(0.0, len(sel) / n - rho) / (2.0 * rho)
+        val = (1.0 - BUDGET_LAMBDA) * rep + BUDGET_LAMBDA * min(1.0, over)
+        if val < best_val:
+            best_val, best_sel = val, sel
     return best_sel
 
 
