@@ -35,11 +35,17 @@ import pickle
 import random
 import sys
 from dataclasses import dataclass
-from fractions import Fraction
 from typing import Callable
 
-import av
 import numpy as np
+
+# NOTE: ``av`` (PyAV) is imported lazily inside ``_encode_clip`` so the referee still
+# runs in environments that only have numpy.  When the real MSR-VTT videos are not
+# present (e.g. a fresh CI container), the referee falls back to seeded SYNTHETIC clips
+# (see ``_build_synthetic_clips``) that reproduce the same structural properties —
+# temporal coherence, piecewise shots, a weak JPEG-size signal, and the 4x4-signature /
+# 8x8-metric generalisation gap.  Only the DATA SOURCE changes in that mode; the metric
+# formula and the algorithm interface are byte-for-byte identical.
 
 # ---------------------------------------------------------------------------
 # (C) CONSTANTS — do NOT change these in train.py
@@ -63,10 +69,14 @@ BUDGET_LAMBDA: float = 0.35
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _VIDEO_GLOB = os.path.join(_HERE, "..", "..", "..", "data", "msrvtt", "videos", "*.mp4")
+# Real MSR-VTT is preferred; if it is absent we run on synthetic clips (see below).
+_REAL_VIDEO_PATHS = sorted(glob.glob(_VIDEO_GLOB))
+_SYNTHETIC = not _REAL_VIDEO_PATHS
+_MODE_TAG = "syn" if _SYNTHETIC else "real"
 _CACHE_PATH = os.path.join(
     _HERE,
     "cache",
-    f"feats_k{NUM_VIDEOS}_m{MAX_FRAMES}_t{THUMB_GRID}_g{SIG_GRID}_s{SEED}.pkl",
+    f"feats_{_MODE_TAG}_k{NUM_VIDEOS}_m{MAX_FRAMES}_t{THUMB_GRID}_g{SIG_GRID}_s{SEED}.pkl",
 )
 
 
@@ -98,6 +108,10 @@ def _thumbnail(rgb: np.ndarray, g: int = THUMB_GRID) -> np.ndarray:
 
 def _encode_clip(path: str) -> Clip | None:
     """Decode one clip → (JPEG sizes, thumbnails).  Returns None on failure."""
+    from fractions import Fraction
+
+    import av  # lazy: only real-video mode needs PyAV/ffmpeg
+
     with av.open(path) as container:
         stream = container.streams.video[0]
         cc = stream.codec_context
@@ -142,9 +156,13 @@ def _encode_clip(path: str) -> Clip | None:
 
 
 def _build_clips() -> list[Clip]:
-    paths = sorted(glob.glob(_VIDEO_GLOB))
+    paths = _REAL_VIDEO_PATHS
     if not paths:
-        raise FileNotFoundError(f"No MSR-VTT videos found at {_VIDEO_GLOB}")
+        print(
+            f"No MSR-VTT videos at {_VIDEO_GLOB} — building SYNTHETIC benchmark instead.",
+            file=sys.stderr,
+        )
+        return _build_synthetic_clips()
     rng = random.Random(SEED)
     chosen = rng.sample(paths, min(NUM_VIDEOS, len(paths)))
     clips: list[Clip] = []
@@ -154,6 +172,98 @@ def _build_clips() -> list[Clip]:
             clips.append(clip)
         print(f"  [{i + 1}/{len(chosen)}] {os.path.basename(p)}", file=sys.stderr)
     return clips
+
+
+# ---------------------------------------------------------------------------
+# (A') SYNTHETIC DATA — numpy-only fallback when real MSR-VTT is unavailable.
+#
+# Each clip is a sequence of "shots": within a shot the 8x8x3 thumbnail drifts
+# slowly (camera/lighting), and shot cuts are abrupt jumps.  This reproduces the
+# four properties that make the real benchmark meaningful:
+#   1. temporal coherence          → uniform sampling is a strong baseline;
+#   2. piecewise shot structure    → content-adaptive coverage can beat uniform;
+#   3. a WEAK JPEG-size signal      → size spikes on motion/cuts (transition frames),
+#      so the paper's steepness selector clusters on non-representative frames;
+#   4. the metric reads the full 8x8 thumbnail while the algorithm only sees the
+#      2x2-block-averaged 4x4 signature → an irreducible generalisation floor
+#      (the loss is NOT saturable to 0).
+# ---------------------------------------------------------------------------
+def _sig_from_thumb(thumb: np.ndarray) -> np.ndarray:
+    """Coarsen an [n, 8, 8, 3] thumbnail to the [n, 48] 4x4 algorithm signature.
+
+    2x2-block averaging is the numpy analogue of taking a 4x4 thumbnail of the same
+    frame: a lossy, coarser view of identical content (mirrors the real referee, where
+    ``sig`` is a 4x4 thumbnail and ``feats`` an 8x8 thumbnail of the same RGB frame).
+    """
+    r = THUMB_GRID // SIG_GRID
+    small = thumb.reshape(-1, SIG_GRID, r, SIG_GRID, r, 3).mean(axis=(2, 4))
+    return small.reshape(thumb.shape[0], -1).astype(np.float32)
+
+
+def _shot_bounds(n: int, rng: np.random.Generator) -> list[int]:
+    """Partition ``n`` frames into shots with deliberately UNEVEN lengths.
+
+    Real clips mix long static shots with short busy ones, so evenly-spaced (uniform)
+    sampling wastes budget on the long shots and misses the short ones.  A skewed
+    Dirichlet split reproduces that; ~1 clip in 5 is a single continuous shot.
+    """
+    n_shots = 1 if rng.random() < 0.2 else int(rng.integers(2, 9))
+    if n_shots == 1:
+        return [0, n]
+    props = rng.dirichlet(np.full(n_shots, 0.5))  # small alpha ⇒ skewed lengths
+    lengths = np.maximum(4, np.round(props * n).astype(int))
+    bounds = [0]
+    for length in lengths:
+        bounds.append(min(n, bounds[-1] + int(length)))
+    bounds[-1] = n
+    return sorted(set(b for b in bounds if 0 <= b <= n))
+
+
+def _make_synthetic_clip(name: str, rng: np.random.Generator) -> Clip:
+    n = int(rng.integers(80, MAX_FRAMES + 1))
+    bounds = _shot_bounds(n, rng)
+
+    thumb = np.zeros((n, THUMB_GRID, THUMB_GRID, 3), dtype=np.float32)
+    for a, b in zip(bounds[:-1], bounds[1:]):
+        length = b - a
+        base = rng.random((THUMB_GRID, THUMB_GRID, 3))
+        # Non-monotonic within-shot camera/lighting wander: a low-frequency random walk
+        # (cumulative small steps).  Content drifts back and forth, so the shot's medoid
+        # represents it better than an arbitrary uniform sample lands on.
+        step_scale = rng.uniform(0.015, 0.05)
+        walk = np.cumsum(rng.normal(0.0, step_scale, (length, *base.shape)), axis=0)
+        walk -= walk.mean(axis=0, keepdims=True)  # centre so ``base`` is the mean look
+        seg = np.clip(base[None] + walk, 0.0, 1.0)
+        seg = np.clip(seg + rng.normal(0.0, 0.015, seg.shape), 0.0, 1.0)
+        thumb[a:b] = seg
+
+    feats = thumb.reshape(n, -1).astype(np.float32)  # [n, 192] metric feature
+    sig = _sig_from_thumb(thumb)  # [n, 48] algorithm signature
+
+    # WEAK size signal: spatial complexity + a spike on inter-frame motion (biggest at
+    # shot cuts) + noise.  Deliberately NOT a clean "representative frame" indicator.
+    complexity = feats.std(axis=1)
+    motion = np.zeros(n, dtype=np.float32)
+    motion[1:] = np.linalg.norm(feats[1:] - feats[:-1], axis=1)
+    raw = 8000.0 + 26000.0 * complexity + 55000.0 * motion + rng.normal(0.0, 1500.0, n)
+    sizes = np.clip(raw, 1000.0, None).astype(np.int32)
+
+    spread = float(np.linalg.norm(feats - feats.mean(axis=0), axis=1).mean())
+    return Clip(
+        name=name,
+        sizes=sizes,
+        sig=sig,
+        feats=feats,
+        fps=float(rng.integers(24, 31)),
+        norm=spread if spread > 1e-6 else 1.0,
+    )
+
+
+def _build_synthetic_clips() -> list[Clip]:
+    rng = np.random.default_rng(SEED)
+    return [
+        _make_synthetic_clip(f"synthetic_{i:04d}.mp4", rng) for i in range(NUM_VIDEOS)
+    ]
 
 
 def _to_records(clips: list[Clip]) -> list[dict]:
