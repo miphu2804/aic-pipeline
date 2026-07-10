@@ -46,3 +46,20 @@ def test_extract_keyframes_cadre_covers_distinct_scenes(tmp_path):
     assert indices == sorted(set(indices))  # sorted, unique
     assert max(indices) - min(indices) >= 4  # spread across the clip
     assert all(kf.timestamp_seconds >= 0 for kf in keyframes)
+
+
+def test_extract_keyframes_dacs_covers_distinct_scenes(tmp_path):
+    # DACS spreads keyframes across accumulated visual change; three distinct scenes
+    # should be covered rather than clustered.
+    colors = [(200, 0, 0)] * 4 + [(0, 200, 0)] * 4 + [(0, 0, 200)] * 4
+    path = tmp_path / "clip.mp4"
+    _write_video(path, colors)
+
+    extractor = KeyframeExtractor(cadre_ratio=0.25)
+    for refine in (False, True):
+        keyframes = extractor.extract_keyframes_dacs(path, refine=refine)
+        indices = [kf.frame_index for kf in keyframes]
+        assert len(indices) >= 2
+        assert indices == sorted(set(indices))  # sorted, unique
+        assert max(indices) - min(indices) >= 4  # spread across the clip
+        assert all(kf.timestamp_seconds >= 0 for kf in keyframes)

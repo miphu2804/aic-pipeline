@@ -18,6 +18,17 @@ that refines it past the greedy 1-optimal floor.
 
 On a 60-clip MSR-VTT benchmark this cuts the representativeness val_loss from the
 U-CESE baseline of 0.62 to 0.29 (uniform sampling sits at 0.36).
+
+Two selectors are exposed:
+
+* :func:`select_keyframes` — the full CADRE: greedy facility-location seed refined by
+  Teitz-Bart local search.  Best quality; builds an ``O(n^2)`` distance matrix.
+* :func:`select_keyframes_dacs` — **DACS** (Dynamic-Aware Coverage Sampling): a much
+  simpler seed that spreads keyframes evenly across *accumulated visual change* (the
+  content arc-length), so busy stretches get more frames and static ones fewer.  Its
+  default form is ``O(n)`` with no distance matrix — ideal for long videos; with
+  ``refine=True`` it feeds the same local search and matches facility-location quality
+  from a cheaper, more temporally-faithful seed.
 """
 
 from __future__ import annotations
@@ -135,3 +146,104 @@ def select_keyframes(
     k = min(n, max(1, ceil(ratio * n)))
     dist = pairwise_distances(np.asarray(signatures, dtype=np.float64))
     return local_search(dist, facility_location(dist, k), rounds=rounds)
+
+
+def arc_length_seed(signatures: np.ndarray, k: int) -> list[int]:
+    """Spread ``k`` keyframes evenly across the clip's *accumulated visual change*.
+
+    The Euclidean distance between consecutive signatures is each frame's "visual
+    velocity"; its cumulative sum is a content arc-length.  Cutting that arc into ``k``
+    equal pieces puts more segments where content moves fast and fewer where it is
+    static — dynamic-aware sampling.  Each segment contributes its centroid-nearest
+    (most settled) frame, which represents that stretch better than a boundary frame.
+
+    Runs in ``O(n)`` with no distance matrix.  Falls back to uniform temporal spacing
+    for a static clip (no visual change to follow).
+
+    Parameters
+    ----------
+    signatures:
+        Array ``[n, d]`` of per-frame colour signatures (see :func:`frame_signature`).
+    k:
+        Number of keyframes to place (``k >= 1``).
+
+    Returns
+    -------
+    list[int]
+        Sorted, unique frame indices (at most ``k``).
+    """
+    sig = np.asarray(signatures, dtype=np.float64)
+    n = int(sig.shape[0])
+    if n == 0:
+        return []
+    if k <= 1:
+        return [0]
+
+    step = np.zeros(n)
+    step[1:] = np.linalg.norm(sig[1:] - sig[:-1], axis=1)
+    arc = np.cumsum(step)
+    total = float(arc[-1])
+    if total <= 1e-9:  # static clip → uniform temporal spacing
+        stride = max(1, n // k)
+        return sorted(set(range(stride // 2, n, stride)))
+
+    edges = total * np.arange(k + 1) / k
+    segment = np.clip(np.searchsorted(edges, arc, side="right") - 1, 0, k - 1)
+    seeds: list[int] = []
+    for s in range(k):
+        members = np.where(segment == s)[0]
+        if members.size:
+            centroid = sig[members].mean(axis=0)
+            nearest = members[np.linalg.norm(sig[members] - centroid, axis=1).argmin()]
+            seeds.append(int(nearest))
+    return sorted(set(seeds))
+
+
+def select_keyframes_dacs(
+    signatures: np.ndarray,
+    ratio: float = 0.03,
+    refine: bool = False,
+    rounds: int = 4,
+) -> list[int]:
+    """Dynamic-Aware Coverage Sampling — a simple, fast keyframe selector.
+
+    Places ``ceil(ratio * n)`` keyframes evenly across the clip's accumulated visual
+    change (see :func:`arc_length_seed`), so a clip's keyframe density follows its
+    content dynamics.  This is the dead-simple, ``O(n)`` cousin of :func:`select_keyframes`:
+    it needs no ``O(n^2)`` distance matrix, which matters for long videos.
+
+    Parameters
+    ----------
+    signatures:
+        Array ``[n, d]`` of per-frame colour signatures (see :func:`frame_signature`).
+    ratio:
+        Fraction of frames to keep; the count is ``ceil(ratio * n)``.  Must be in (0, 1].
+    refine:
+        If ``True``, refine the arc-length seed with the same Teitz-Bart local search as
+        :func:`select_keyframes` (builds the distance matrix, ``O(n^2)``).  On the MSR-VTT
+        referee this matches facility-location quality from a cheaper, more
+        temporally-faithful seed; leave ``False`` for the fast ``O(n)`` path.
+    rounds:
+        Maximum local-search rounds when ``refine`` is ``True``.
+
+    Returns
+    -------
+    list[int]
+        Sorted, unique frame indices — the keyframes.
+    """
+    if not (0.0 < ratio <= 1.0):
+        raise ValueError(f"ratio must be in (0, 1], got {ratio}")
+
+    n = int(signatures.shape[0])
+    if n == 0:
+        return []
+    if n < 2:
+        return [0]
+
+    k = min(n, max(1, ceil(ratio * n)))
+    sig = np.asarray(signatures, dtype=np.float64)
+    seed = arc_length_seed(sig, k)
+    if not refine:
+        return seed
+    dist = pairwise_distances(sig)
+    return local_search(dist, seed, rounds=rounds)

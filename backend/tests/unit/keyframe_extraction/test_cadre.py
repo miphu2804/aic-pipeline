@@ -108,3 +108,73 @@ def test_select_keyframes_rejects_out_of_range_ratio():
         cadre.select_keyframes(sig, ratio=0.0)
     with pytest.raises(ValueError):
         cadre.select_keyframes(sig, ratio=1.5)
+
+
+# --- arc_length_seed (DACS) -------------------------------------------------
+def _half_static_half_dynamic(n_static=50, n_dynamic=50, dims=3):
+    """A clip whose first half is frozen and second half changes every frame."""
+    static = np.zeros((n_static, dims))
+    ramp = np.linspace(0.2, 1.0, n_dynamic)[:, None] * np.ones((1, dims))
+    return np.vstack([static, ramp])
+
+
+def test_arc_length_seed_returns_sorted_unique_within_budget():
+    sig = np.random.RandomState(5).rand(60, 12)
+    seeds = cadre.arc_length_seed(sig, k=5)
+    assert seeds == sorted(seeds)
+    assert len(seeds) == len(set(seeds))
+    assert len(seeds) <= 5
+
+
+def test_arc_length_seed_puts_more_keyframes_where_content_moves():
+    # equal-sized static/dynamic halves: a plain uniform split would give 2/2, but
+    # DACS follows visual change and concentrates keyframes in the moving half.
+    sig = _half_static_half_dynamic()
+    seeds = cadre.arc_length_seed(sig, k=4)
+    in_dynamic = sum(i >= 50 for i in seeds)
+    in_static = sum(i < 50 for i in seeds)
+    assert in_dynamic > in_static
+
+
+def test_arc_length_seed_static_clip_falls_back_to_uniform_spacing():
+    # No visual change ⇒ arc length is zero ⇒ evenly spaced temporal samples.
+    seeds = cadre.arc_length_seed(np.zeros((40, 6)), k=4)
+    assert len(seeds) == 4
+    assert seeds == sorted(seeds)
+    # evenly spaced: consecutive keyframes are a constant stride apart
+    assert len(set(np.diff(seeds))) == 1
+
+
+def test_arc_length_seed_handles_tiny_and_degenerate_input():
+    assert cadre.arc_length_seed(np.zeros((0, 6)), k=3) == []
+    assert cadre.arc_length_seed(np.zeros((5, 6)), k=1) == [0]
+
+
+# --- select_keyframes_dacs --------------------------------------------------
+def test_select_keyframes_dacs_count_within_budget():
+    sig = np.random.RandomState(6).rand(100, 12)
+    out = cadre.select_keyframes_dacs(sig, ratio=0.05)  # ceil(0.05*100)=5
+    assert 1 <= len(out) <= 5
+    assert out == sorted(out)
+    assert len(out) == len(set(out))
+
+
+def test_select_keyframes_dacs_covers_both_scenes():
+    sig = np.vstack([np.tile([0.0] * 3, (25, 1)), np.tile([1.0] * 3, (25, 1))])
+    out = cadre.select_keyframes_dacs(sig, ratio=0.04)  # k=2
+    assert any(i < 25 for i in out)
+    assert any(i >= 25 for i in out)
+
+
+def test_select_keyframes_dacs_refine_matches_budget_and_covers_scenes():
+    sig = np.vstack([np.tile([0.0] * 3, (25, 1)), np.tile([1.0] * 3, (25, 1))])
+    out = cadre.select_keyframes_dacs(sig, ratio=0.04, refine=True)
+    assert any(i < 25 for i in out)
+    assert any(i >= 25 for i in out)
+
+
+def test_select_keyframes_dacs_handles_tiny_input_and_bad_ratio():
+    assert cadre.select_keyframes_dacs(np.zeros((1, 12))) == [0]
+    assert cadre.select_keyframes_dacs(np.zeros((0, 12))) == []
+    with pytest.raises(ValueError):
+        cadre.select_keyframes_dacs(np.zeros((10, 12)), ratio=0.0)
