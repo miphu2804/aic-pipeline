@@ -149,6 +149,7 @@ def cadre(
     *,
     rho: float = TARGET_KEYFRAME_RATIO,
     kmax_mul: float = 3.0,
+    restarts: int = 2,
     warmup: int = 0,
 ) -> list[int]:
     """CADRE — Change-point Anchored Density-adaptive Representative Extraction.
@@ -165,6 +166,7 @@ def cadre(
     [iter 7] Density-adaptive budget: instead of a fixed count, grow the keyframe set
              and keep the size that minimises rep+budget on the signature — busy clips
              get more keyframes, static clips fewer.
+    [iter 8] A couple of random restarts per size escape weak local optima.
     """
     n = len(sizes)
     if n < 2:
@@ -176,15 +178,20 @@ def cadre(
 
     kmax = min(n, max(2, math.ceil(rho * n * kmax_mul)))
     order = _facility_location(dist, kmax)
+    rng = np.random.RandomState(0)
 
     best_sel, best_val = order[:1], math.inf
     for k in range(1, len(order) + 1):
-        sel = _local_search(dist, order[:k])
-        rep = min(1.0, dist[:, sel].min(axis=1).mean() / norm)
-        over = max(0.0, len(sel) / n - rho) / (2.0 * rho)
-        val = (1.0 - BUDGET_LAMBDA) * rep + BUDGET_LAMBDA * min(1.0, over)
-        if val < best_val:
-            best_val, best_sel = val, sel
+        inits = [order[:k]] + [
+            rng.choice(n, k, replace=False).tolist() for _ in range(restarts)
+        ]
+        for init in inits:
+            sel = _local_search(dist, init)
+            rep = min(1.0, dist[:, sel].min(axis=1).mean() / norm)
+            over = max(0.0, len(sel) / n - rho) / (2.0 * rho)
+            val = (1.0 - BUDGET_LAMBDA) * rep + BUDGET_LAMBDA * min(1.0, over)
+            if val < best_val:
+                best_val, best_sel = val, sel
     return best_sel
 
 
