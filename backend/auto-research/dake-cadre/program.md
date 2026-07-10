@@ -18,7 +18,7 @@ non-representative — CADRE's job is to spread coverage while staying content-a
 | File | Who edits it |
 |---|---|
 | `prepare.py` | **Human only — READ-ONLY for the agent.** Real MSR-VTT clips + metric. |
-| `train.py` | **Agent edits this.** One idea per iteration; grow the `cadre()` module. |
+| `train.py` | **Agent edits this.** One idea per iteration; grow the champion selector (`dacs()` as of iter 9, formerly `cadre()`). |
 | `program.md` | Human tweaks (operating manual). |
 
 ## Metric (in prepare.py — do not edit)

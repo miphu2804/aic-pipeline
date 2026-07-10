@@ -162,7 +162,7 @@ def _local_search(dist: np.ndarray, selected: list[int], rounds: int = 4) -> lis
     return sorted(set(sel))
 
 
-def cadre(
+def dacs(
     sizes: list[int],
     sig: np.ndarray,
     fps: float,
@@ -171,11 +171,12 @@ def cadre(
     kmax_mul: float = 3.0,
     warmup: int = 0,
 ) -> list[int]:
-    """CADRE — Change-point Anchored Density-adaptive Representative Extraction.
+    """DACS — Dynamic-Aware Coverage Sampling (the iter-9 champion selector).
 
-    Built incrementally by the autoresearch loop, one component per iteration.
-    The paper's size-only signal tops out around uniform sampling (~0.363); CADRE
-    instead selects on the cheap 4x4 colour signature the decoder yields for free.
+    Grew out of CADRE inside this loop, one component per iteration; iter 9 swapped the
+    greedy facility-location seed for the arc-length seed, so the champion is now
+    DACS-based (hence the name). The paper's size-only signal tops out around uniform
+    sampling (~0.363); this selects on the cheap 4x4 colour signature instead.
 
     [iter 4] Budget = ceil(rho * n): keeping the fractional keyframe (int() dropped it)
              lands squarely on the rep/budget optimum instead of overshooting.
@@ -215,7 +216,7 @@ def run() -> None:
     deadline = time.time() + TIME_BUDGET_SECONDS
 
     def algorithm(sizes: list[int], sig, fps: float) -> list[int]:
-        return cadre(sizes, sig, fps, rho=TARGET_KEYFRAME_RATIO, kmax_mul=3.0, warmup=0)
+        return dacs(sizes, sig, fps, rho=TARGET_KEYFRAME_RATIO, kmax_mul=3.0, warmup=0)
 
     val_loss = 1.0
     iterations = 0
