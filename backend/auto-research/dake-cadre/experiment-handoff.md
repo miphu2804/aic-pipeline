@@ -10,11 +10,21 @@
   a named module **CADRE** (Content-Aware Density-adaptive Representative Extraction),
   measured on **real MSR-VTT video** via an autoresearch loop.
 - **Status:** CADRE **converged at `val_loss = 0.2847`** vs DAKE baseline `0.6195`
-  (**-54%**; uniform sampling reference `0.363`). We are at the floor of the current
-  metric — further gains are ~0.001/iter. Everything is committed on branch
-  `feat/dynamic-aware-keyframe-extraction`.
-- **Two ways forward:** (A) keep micro-tuning the current metric (marginal), or
-  (B) **upgrade the referee to a CLIP-embedding metric** for real, competition-relevant
+  (**-54%**; uniform sampling reference `0.363`) on the **real** referee. We are at the
+  floor of the current metric — further gains are ~0.001/iter.
+- **Latest (iter 9, DACS):** since the metric is at its floor, the lever is *simplicity*,
+  not a better optimiser. **DACS** (Dynamic-Aware Coverage Sampling) replaces greedy
+  facility-location + random restarts with an arc-length seed: split the clip into `k`
+  segments of equal *accumulated visual change* and seed the local search with each
+  segment's centroid frame. It ties/edges the champion while deleting two components, and
+  its pure `O(n)` form (no distance matrix) captures ~75% of the uniform→CADRE gain. This
+  is now the production `select_keyframes_dacs`. See §7, §10.
+- **⚠️ Referee mode:** this environment has **no MSR-VTT**, so the referee auto-falls back
+  to a numpy-only **synthetic** benchmark (see §5a). Iter-9/DACS numbers below are on that
+  synthetic referee (`champion 0.312769`, `DACS 0.312739`) and are NOT comparable to the
+  `0.2847` real number — re-confirm DACS on real MSR-VTT before it replaces CADRE.
+- **Two ways forward:** (A) keep micro-tuning the current metric (marginal — mostly done),
+  or (B) **upgrade the referee to a CLIP-embedding metric** for real, competition-relevant
   headroom (recommended — see §9).
 
 ## 2. The 3-file contract (autoresearch loop)
@@ -93,6 +103,19 @@ Data source: `data/msrvtt/videos/*.mp4` (7010 clips, 60 sampled by SEED). Featur
 decoded once and cached to `cache/*.pkl` (~17 s first run). **If you change any referee
 constant, delete `cache/*.pkl` so it rebuilds.**
 
+### 5a. Synthetic fallback (when MSR-VTT is absent — e.g. a fresh container)
+
+`prepare.py` now imports PyAV lazily and, if `data/msrvtt/videos/*.mp4` is empty, builds a
+seeded **numpy-only synthetic** benchmark instead of raising (cache tag `feats_syn_*`).
+The metric formula and the `algorithm(sizes, sig, fps)` interface are byte-for-byte
+identical; only the data *source* changes. The synthetic clips deliberately reproduce the
+four properties that make the real metric meaningful: temporal coherence (uniform is
+strong), piecewise shots of uneven length, a weak size signal (spikes on motion/cuts), and
+the 4×4→8×8 generalisation gap (loss not saturable). Reference points track the real
+referee: `uniform 0.3446 ≈ all-frames 0.3505`, `random 0.4982`, `DAKE 0.5009`.
+To get the **real** metric back, drop MSR-VTT clips into `data/msrvtt/videos/` and delete
+`cache/*.pkl`. **Iter-9/DACS numbers in this file are on the synthetic referee.**
+
 **Algorithm interface** the loop must implement:
 ```python
 algorithm(sizes: list[int], sig: np.ndarray[n, 48], fps: float) -> list[int]  # frame indices
@@ -105,16 +128,24 @@ indices (unique, in-range, sorted).
 
 Selection on the 4×4 colour signature (NOT on JPEG size — that signal proved too weak):
 1. `_pairwise_dist(sig)` → Euclidean distance matrix.
-2. `_facility_location(dist, k)` → greedy k-medoid (minimise mean nearest-selected dist).
+2. **DACS arc-length seed (iter 9):** `_arclength_init(sig, k)` splits the clip into `k`
+   segments of equal *accumulated visual change* (cumulative consecutive-signature
+   distance) and takes each segment's centroid-nearest frame. Replaces the old greedy
+   `_facility_location` seed **and** the iter-8 random restarts — the seed already respects
+   the clip's temporal/shot structure, so one local search per size suffices. `O(n)` seed,
+   no distance matrix.
 3. `_local_search(dist, sel)` → Teitz-Bart swap refinement (beats greedy 1-optimal floor).
 4. **Density-adaptive budget (iter 7):** grow k from 1..ceil(3·rho·n), keep the size that
    minimises `(rep_on_sig + budget_penalty)` — busy clips get more keyframes, static
    clips fewer.
-5. **Random restarts (iter 8):** a couple of random inits per size escape weak optima.
+
+(Removed in iter 9: `_facility_location` and the per-size random-restart loop — DACS made
+them redundant. History is in `git log`, search `facility-location`.)
 
 ## 7. Results log (`results.tsv`)
 
 ```
+referee=real (prior work, machine with MSR-VTT downloaded)
 iter  val_loss   idea                                                    keep
 0     0.619522   baseline U-CESE top-rho% steepness (paper DAKE)         seed
 1     0.414005   NMS spread on steepness signal                          KEEP
@@ -124,8 +155,15 @@ iter  val_loss   idea                                                    keep
 5     0.288058   Teitz-Bart local search                                 KEEP
 6     0.288058   restarts/L1/normalize/more-rounds — no gain             DISCARD
 7     0.285957   density-adaptive budget (per-clip elbow)                KEEP
-8     0.284700   random restarts per size                                KEEP  ← current best
+8     0.284700   random restarts per size                                KEEP  ← best on real
+
+referee=syn (this environment; synthetic fallback, same metric — see §5a)
+      reference points: DAKE 0.5009, uniform 0.3446, all-frames 0.3505
+8*    0.312769   iter-8 champion re-measured on the synthetic referee    baseline
+9     0.312739   DACS arc-length seed replaces facility-loc + restarts   KEEP  ← simpler, ties
 ```
+
+Numbers across the two blocks are NOT comparable (different data source).
 
 ## 8. Key findings (don't relearn these the hard way)
 
@@ -137,15 +175,21 @@ iter  val_loss   idea                                                    keep
 - **Facility-location + local search on the 4×4 signature ≈ the 8×8 optimum.** We are at
   the generalization floor; L1 distance, signature normalization, more local-search
   rounds, and PAM full-swap gave **no** improvement over Teitz-Bart.
+- **At the floor, simplicity is the only remaining win (iter 9).** A DACS arc-length seed
+  (split by accumulated visual change, one centroid per segment) matches facility-location
+  + restarts, and its pure `O(n)` no-distance-matrix form gets ~75% of the uniform→CADRE
+  gain. Farthest-point (k-center) is *worse* than uniform — it chases outlier/transition
+  frames, wrong objective for mean-nearest representativeness.
 
 ## 9. What to do next
 
-### Path A — squeeze the current metric (marginal, ~0.001/iter)
-Only untried idea with a rationale: **change-point fusion (the "Change-point Anchored"
-in CADRE's name).** Use U-CESE size-steepness to *force-include* the frame right after a
-strong steepness spike (a hard cut the 4×4 signature may blur across), then let
-facility-location fill the rest under the adaptive budget. Test via the fast explorer
-first; expect small or no gain, but it completes the algorithm's namesake.
+### Path A — squeeze the current metric (essentially done, ~0.0000x/iter)
+The optimizer is at the floor and iter 9 spent the last simplicity win. One namesake idea
+remains: **change-point fusion.** Use U-CESE size-steepness to *force-include* the frame
+right after a strong steepness spike (a hard cut the 4×4 signature may blur across), then
+let the DACS seed + local search fill the rest. Test via the fast explorer first; expect
+small or no gain. Do not expect the metric to move meaningfully — it is saturated at the
+4×4→8×8 gap.
 
 ### Path B — upgrade the referee for REAL headroom (recommended)
 Replace the 8×8-thumbnail representativeness with a **CLIP-embedding** metric, so
@@ -164,14 +208,21 @@ Whichever path: the metric is the lever. On the current thumbnail metric the loo
 
 ## 10. Production deliverable (already shipped & tested)
 
-- `backend/src/keyframe_extraction/cadre.py` — `select_keyframes(signatures, ratio)` plus
-  `frame_signature`, `pairwise_distances`, `facility_location`, `local_search`. (Note:
-  production ships the fixed-`ceil(ratio*n)` + local-search version = 0.288; the
-  adaptive-k/restart tweaks live only in the experiment `train.py` — port them only if a
-  future metric shows the gain is worth the added complexity.)
-- `backend/src/keyframe_extraction/extractor.py` — `KeyframeExtractor.extract_keyframes_cadre(video_path)`.
-- `backend/tests/unit/keyframe_extraction/test_cadre.py` (14 tests), `test_extractor.py`
-  (integration on a generated clip). Run: `uv run pytest` (47 pass).
+- `backend/src/keyframe_extraction/cadre.py`:
+  - `select_keyframes(signatures, ratio)` = CADRE, fixed-`ceil(ratio*n)` facility-location
+    + local search = 0.288 on real. **Unchanged real-data-validated default.**
+  - **`select_keyframes_dacs(signatures, ratio, refine=False)`** (new) = DACS. `refine=False`
+    is the pure `O(n)` dynamic-aware path (no distance matrix; 0.3284 syn). `refine=True`
+    feeds the arc-length seed to the same local search and matches facility-location from a
+    cheaper seed (0.3138 vs 0.3141 syn). Plus helper `arc_length_seed(signatures, k)`.
+  - Also `frame_signature`, `pairwise_distances`, `facility_location`, `local_search`.
+- `backend/src/keyframe_extraction/extractor.py` — `extract_keyframes_cadre(video_path)` and
+  **`extract_keyframes_dacs(video_path, refine=False)`** (new; shared `_decode_signatures`).
+- `backend/tests/unit/keyframe_extraction/test_cadre.py` + `test_extractor.py` — DACS unit +
+  integration tests added. Run the numpy-only slice: `uv run pytest tests/unit/keyframe_extraction`
+  (50 pass; server/API tests need `fastapi`/`uvicorn`).
+- **Before making DACS the default:** A/B DACS vs CADRE on **real** MSR-VTT — the
+  0.3138-vs-0.3141 edge is on the synthetic referee and is within noise there.
 - `backend/auto-research/dake-cadre/benchmark.py` — logs DAKE vs CADRE to MLflow:
   `uv run python auto-research/dake-cadre/benchmark.py`
   `uv run mlflow ui --backend-store-uri sqlite:///auto-research/dake-cadre/mlflow.db`
@@ -192,6 +243,15 @@ Whichever path: the metric is the lever. On the current thumbnail metric the loo
 
 ## 12. Git state
 
-Branch `feat/dynamic-aware-keyframe-extraction`. Latest experiment commit:
-`087afd3 feat(cadre): add random restarts per size ...`. The full CADRE story is in
-`git log` (search `cadre`) and `docs/PROGRESS.md`.
+Work continues on `claude/dynamic-aware-keyframe-extraction-p9td5z` (branched from
+`feat/dynamic-aware-keyframe-extraction`). Latest commits (newest first):
+`feat(keyframe-extraction): add DACS dynamic-aware selector to production`,
+`feat(cadre): DACS arc-length init replaces facility-location + restarts` (iter 9),
+`chore(auto-research): add numpy-only synthetic referee fallback for data-less envs`.
+The full CADRE story is in `git log` (search `cadre`/`dacs`) and `docs/PROGRESS.md`.
+
+**Env note for the next agent:** this container has no MSR-VTT and no PyAV/ffmpeg by
+default. To run: `cd backend && uv venv --python /usr/local/bin/python3` then
+`uv pip install "numpy>=2.0" pytest` (the referee + numpy-only tests run on that alone).
+Add `av pydantic` to also run the extractor tests. The loop runs on the synthetic
+referee automatically (§5a).

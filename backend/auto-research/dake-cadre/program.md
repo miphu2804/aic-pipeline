@@ -62,6 +62,12 @@ LOOP:
 
 ## Idea Pool for CADRE (ordered by expected impact)
 
+### Tier 0 — DONE (kept)
+- [x] **facility-location + Teitz-Bart local search** on the 4×4 colour signature (iters 2–8).
+- [x] **DACS arc-length seed** (iter 9): split by accumulated visual change, centroid per
+      segment; replaced facility-location + restarts. Ties the champion, much simpler.
+      The optimizer is now at the 4×4→8×8 floor — expect no more metric movement here.
+
 ### Tier 1 — spread coverage (fix U-CESE clustering; biggest expected win)
 - [ ] **min-gap dedup**: after top-k steepness, if two picks are within G frames keep
       the higher-steepness one; refill budget from the next-best spread-out frames.
