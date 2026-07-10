@@ -24,6 +24,7 @@ import numpy as np
 sys.path.insert(0, "auto-research/dake-cadre")
 
 from prepare import (  # noqa: E402  # isort:skip
+    BUDGET_LAMBDA,
     TARGET_KEYFRAME_RATIO,
     TIME_BUDGET_SECONDS,
     evaluate,
@@ -147,7 +148,7 @@ def cadre(
     fps: float,
     *,
     rho: float = TARGET_KEYFRAME_RATIO,
-    kmul: float = 1.0,
+    kmax_mul: float = 3.0,
     warmup: int = 0,
 ) -> list[int]:
     """CADRE — Change-point Anchored Density-adaptive Representative Extraction.
@@ -161,14 +162,30 @@ def cadre(
     [iter 4] Budget = ceil(rho * n): keeping the fractional keyframe (int() dropped it)
              lands squarely on the rep/budget optimum instead of overshooting.
     [iter 5] Teitz-Bart local search refines the greedy set past its 1-optimal floor.
+    [iter 7] Density-adaptive budget: instead of a fixed count, grow the keyframe set
+             and keep the size that minimises rep+budget on the signature — busy clips
+             get more keyframes, static clips fewer.
     """
     n = len(sizes)
     if n < 2:
         return list(range(n))
 
-    k = min(n, max(1, math.ceil(rho * n * kmul)))
-    dist = _pairwise_dist(np.asarray(sig, dtype=np.float64))
-    return _local_search(dist, _facility_location(dist, k))
+    sig = np.asarray(sig, dtype=np.float64)
+    dist = _pairwise_dist(sig)
+    norm = float(np.linalg.norm(sig - sig.mean(axis=0), axis=1).mean()) or 1.0
+
+    kmax = min(n, max(2, math.ceil(rho * n * kmax_mul)))
+    order = _facility_location(dist, kmax)
+
+    best_sel, best_val = order[:1], math.inf
+    for k in range(1, len(order) + 1):
+        sel = _local_search(dist, order[:k])
+        rep = min(1.0, dist[:, sel].min(axis=1).mean() / norm)
+        over = max(0.0, len(sel) / n - rho) / (2.0 * rho)
+        val = (1.0 - BUDGET_LAMBDA) * rep + BUDGET_LAMBDA * min(1.0, over)
+        if val < best_val:
+            best_val, best_sel = val, sel
+    return best_sel
 
 
 # ---------------------------------------------------------------------------
@@ -178,7 +195,7 @@ def run() -> None:
     deadline = time.time() + TIME_BUDGET_SECONDS
 
     def algorithm(sizes: list[int], sig, fps: float) -> list[int]:
-        return cadre(sizes, sig, fps, rho=TARGET_KEYFRAME_RATIO, kmul=1.0, warmup=0)
+        return cadre(sizes, sig, fps, rho=TARGET_KEYFRAME_RATIO, kmax_mul=3.0, warmup=0)
 
     val_loss = 1.0
     iterations = 0
